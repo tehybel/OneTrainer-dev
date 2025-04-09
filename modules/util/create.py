@@ -697,10 +697,8 @@ def create_optimizer(
 
         # LAMB_8BIT Optimizer
         case Optimizer.LAMB_8BIT:
-            from pytorch_optimizer.optimizer.lamb import Lamb8bit
-            optimizer = Lamb8bit(
-                    #import bitsandbytes as bnb
-                    #optimizer = bnb.optim.LAMB8bit(
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.LAMB8bit(
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,
@@ -710,7 +708,6 @@ def create_optimizer(
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
                 amsgrad=optimizer_config.amsgrad if optimizer_config.amsgrad is not None else False,
                 adam_w_mode=optimizer_config.adam_w_mode if optimizer_config.adam_w_mode is not None else True,
-                optim_bits=optimizer_config.optim_bits if optimizer_config.optim_bits is not None else 32,
                 min_8bit_size=optimizer_config.min_8bit_size if optimizer_config.min_8bit_size is not None else 4096,
                 percentile_clipping=optimizer_config.percentile_clipping if optimizer_config.percentile_clipping is not None else 100,
                 block_wise=optimizer_config.block_wise if optimizer_config.block_wise is not None else False,

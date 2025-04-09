@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -e
+source /AI2/onetrainer-alt/env.sh
 
 source "${BASH_SOURCE[0]%/*}/lib.include.sh"
 

@@ -621,7 +621,6 @@ class GenericTrainer(BaseTrainer):
         print('-'*32)
         print(f'High loss of {loss:.5f} detected! Batch info: ')
         for key in ('image_path', 'crop_resolution', 'prompt_1'):
-            print(repr(batch))
             info = str(batch.get(key, None))
 
             # only truncate if it's a prompt without text embedding tokens

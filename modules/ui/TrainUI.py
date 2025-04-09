@@ -31,6 +31,7 @@ from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.torch_util import torch_gc
 from modules.util.TrainProgress import TrainProgress
 from modules.util.ui import components
+from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
 from modules.zluda import ZLUDA
 
@@ -56,6 +57,9 @@ class TrainUI(ctk.CTk):
         self.title("OneTrainer")
         self.geometry("1100x740")
 
+        self.after(100, lambda: self._set_icon())
+
+        # more efficient version of ctk.set_appearance_mode("System"), which retrieves the system theme on each main loop iteration
         ctk.set_appearance_mode("Light" if AppearanceModeTracker.detect_appearance_mode() == 0 else "Dark")
         ctk.set_default_color_theme("blue")
 
@@ -104,6 +108,10 @@ class TrainUI(ctk.CTk):
             self.change_training_method,
             self.load_preset,
         )
+
+    def _set_icon(self):
+        """Set the window icon safely after window is ready"""
+        set_window_icon(self)
 
     def bottom_bar(self, master):
         frame = ctk.CTkFrame(master=master, corner_radius=0)
@@ -447,6 +455,11 @@ class TrainUI(ctk.CTk):
         components.label(frame, 4, 0, "Placeholder",
                          tooltip="The placeholder used when using the embedding in a prompt")
         components.entry(frame, 4, 1, self.ui_state, "embedding.placeholder")
+
+        # output embedding
+        components.label(frame, 5, 0, "Output embedding",
+                         tooltip="Output embeddings are calculated at the output of the text encoder, not the input. This can improve results for larger text encoders and lower VRAM usage.")
+        components.switch(frame, 5, 1, self.ui_state, "embedding.is_output_embedding")
 
         frame.pack(fill="both", expand=1)
         return frame

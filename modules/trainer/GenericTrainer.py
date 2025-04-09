@@ -1,5 +1,4 @@
 import contextlib
-import math
 import copy
 import json
 import os
@@ -38,11 +37,13 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms.functional import pil_to_tensor
 
 import huggingface_hub
+from numpy import isnan, percentile, set_printoptions
 from requests.exceptions import ConnectionError
 from tqdm import tqdm
 
-from numpy import percentile, set_printoptions, isnan
 set_printoptions(threshold=1) # always summarize big outputs instead of showing huge 10x200 matrices on screen
+import IPython
+
 
 class GenericTrainer(BaseTrainer):
     model_loader: BaseModelLoader
@@ -602,7 +603,7 @@ class GenericTrainer(BaseTrainer):
         norm_before = self.__get_grad_norm()
         self.grad_history.append(norm_before)
 
-        # ... Google ML Engineers say that 10% clipping is a good value, and if you need to clip 
+        # ... Google ML Engineers say that 10% clipping is a good value, and if you need to clip
         # much harder you should likely lower the LR instead. So let's go with that.
         # This is only meant to help out a tiny bit with stability anyway.
         clip_value = percentile(self.grad_history, 10)
@@ -624,7 +625,7 @@ class GenericTrainer(BaseTrainer):
             info = str(batch.get(key, None))
 
             # only truncate if it's a prompt without text embedding tokens
-            if key == "prompt" and len(info) > 70 and "<" not in info: 
+            if key == "prompt" and len(info) > 70 and "<" not in info:
                 info = info[:70] + "..."
 
             print(f' - {key} = {info}')
@@ -651,7 +652,7 @@ class GenericTrainer(BaseTrainer):
         # remove huge useless list of numbers
         if 'params' in pg:
             pg['params_count'] = len(pg['params'])
-            del pg['params'] 
+            del pg['params']
 
         # messy output, not useful
         if 'buffer' in pg:
@@ -673,7 +674,7 @@ class GenericTrainer(BaseTrainer):
         for pg in self.model.optimizer.state_dict()['param_groups']:
             pg = self.__param_group_to_strings(pg)
 
-            for k in pg.keys():
+            for k in pg:
                 assert k not in result, repr(k)
 
             result.update(pg)
@@ -690,7 +691,7 @@ class GenericTrainer(BaseTrainer):
 
     # save hyper-parameters to tensorboard
     def save_tensorboard_hparams(self):
-        print(f'Saving tensorboard hparams ...')
+        print('Saving tensorboard hparams ...')
 
         try:
             if self.validation_loss_history:
@@ -742,12 +743,10 @@ class GenericTrainer(BaseTrainer):
 
             self.tensorboard.add_hparams(hparams, metrics, run_name=".")
 
-            print("IPython shell UP"); import IPython; IPython.embed()
-
         except Exception as e:
             print("ERROR:")
             print(e)
-            import IPython; IPython.embed()
+            IPython.embed()
 
     def train(self):
 
@@ -760,7 +759,7 @@ class GenericTrainer(BaseTrainer):
             for _epoch in tqdm(range(train_progress.epoch, self.config.epochs, 1), desc="epoch"):
                 self.data_loader.get_data_set().start_next_epoch()
             return
-        
+
         scaler = create_grad_scaler() if enable_grad_scaling(self.config.train_dtype, self.parameters) else None
 
         self.__apply_fused_back_pass(scaler)
@@ -896,7 +895,7 @@ class GenericTrainer(BaseTrainer):
                             raise ValueError("Got a NaN loss, training went off the rails...")
 
                         if self.check_high_loss(accumulated_loss, batch):
-                            
+
                             img_paths = "; ".join(batch['image_path'])
                             prompts = "; ".join(batch['prompt_1'])
                             concepts = "; ".join(batch['concept_name'])

@@ -619,8 +619,9 @@ class GenericTrainer(BaseTrainer):
     def warn_high_loss(self, loss, batch):
         print('-'*32)
         print(f'High loss of {loss:.5f} detected! Batch info: ')
-        for key in ('image_path', 'crop_resolution', 'prompt'):
-            info = str(batch[key])
+        for key in ('image_path', 'crop_resolution', 'prompt_1'):
+            print(repr(batch))
+            info = str(batch.get(key, None))
 
             # only truncate if it's a prompt without text embedding tokens
             if key == "prompt" and len(info) > 70 and "<" not in info: 
@@ -897,7 +898,7 @@ class GenericTrainer(BaseTrainer):
                         if self.check_high_loss(accumulated_loss, batch):
                             
                             img_paths = "; ".join(batch['image_path'])
-                            prompts = "; ".join(batch['prompt'])
+                            prompts = "; ".join(batch['prompt_1'])
                             concepts = "; ".join(batch['concept_name'])
                             text = f'High loss detected: {accumulated_loss:.5f}\nConcept name: {repr(concepts)}\nImages: {repr(img_paths)}\nPrompt: {repr(prompts)}'
                             self.tensorboard.add_text("loss/high_loss", text, train_progress.global_step)

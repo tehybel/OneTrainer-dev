@@ -1,5 +1,6 @@
 import json
 import threading
+import random
 import traceback
 import webbrowser
 from collections.abc import Callable
@@ -34,8 +35,10 @@ from modules.util.ui.UIState import UIState
 from modules.zluda import ZLUDA
 
 import torch
+import numpy as np
 
 import customtkinter as ctk
+from customtkinter import AppearanceModeTracker
 
 
 class TrainUI(ctk.CTk):
@@ -53,7 +56,7 @@ class TrainUI(ctk.CTk):
         self.title("OneTrainer")
         self.geometry("1100x740")
 
-        ctk.set_appearance_mode("System")
+        ctk.set_appearance_mode("Light" if AppearanceModeTracker.detect_appearance_mode() == 0 else "Dark")
         ctk.set_default_color_theme("blue")
 
         self.train_config = TrainConfig.default_values()
@@ -561,6 +564,17 @@ class TrainUI(ctk.CTk):
 
     def __training_thread_function(self):
         error_caught = False
+        seed = 42
+        print(f'Seeding random with value {seed}.')
+
+        random.seed(seed)
+        torch.manual_seed(seed)
+        torch.set_deterministic_debug_mode("error")
+        #torch.use_deterministic_algorithms(True)
+        #np.random.seed(seed)
+
+        
+
 
         self.training_callbacks = TrainCallbacks(
             on_update_train_progress=self.on_update_train_progress,

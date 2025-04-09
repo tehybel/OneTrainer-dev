@@ -675,8 +675,10 @@ def create_optimizer(
 
         # LAMB Optimizer
         case Optimizer.LAMB:
-            from bitsandbytes.optim import LAMB
-            optimizer = LAMB(
+            #from bitsandbytes.optim import LAMB
+            #optimizer = LAMB(
+            from pytorch_optimizer.optimizer.lamb import Lamb
+            optimizer = Lamb(
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,
@@ -695,8 +697,10 @@ def create_optimizer(
 
         # LAMB_8BIT Optimizer
         case Optimizer.LAMB_8BIT:
-            import bitsandbytes as bnb
-            optimizer = bnb.optim.LAMB8bit(
+            from pytorch_optimizer.optimizer.lamb import Lamb8bit
+            optimizer = Lamb8bit(
+                    #import bitsandbytes as bnb
+                    #optimizer = bnb.optim.LAMB8bit(
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,

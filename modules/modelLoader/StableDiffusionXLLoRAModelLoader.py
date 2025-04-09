@@ -49,4 +49,6 @@ class StableDiffusionXLLoRAModelLoader(
         lora_model_loader.load(model, model_names)
         embedding_loader.load_multiple(model, model_names)
 
+        model.vae.enable_tiling() 
+
         return model

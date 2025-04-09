@@ -21,7 +21,7 @@ class DataLoaderMgdsMixin(metaclass=ABCMeta):
             is_validation: bool = False,
     ):
         concepts = config.concepts
-        if config is None:
+        if concepts is None:
             with open(config.concept_file_name, 'r') as f:
                 concepts = [ConceptConfig.default_values().from_dict(c) for c in json.load(f)]
 

@@ -553,8 +553,10 @@ def create_optimizer(
 
         # AdEMAMix Optimizer
         case Optimizer.AdEMAMix:
-            import bitsandbytes as bnb
-            optimizer = bnb.optim.AdEMAMix(
+            from pytorch_optimizer.optimizer.ademamix import AdEMAMix
+            optimizer = AdEMAMix(
+            #import bitsandbytes as bnb
+            #optimizer = bnb.optim.AdEMAMix(
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -624,7 +626,14 @@ def create_optimizer(
                 block_wise=optimizer_config.block_wise if optimizer_config.block_wise is not None else True,
             )
 
-        # LION Optimizer
+        # LION Optimizer - Symbolic Discovery of Optimization Algorithms.
+        # - weight_decay 	float float. weight decay (L2 penalty). 0.0
+        # - weight_decouple 	bool bool. the optimizer uses decoupled weight decay as in AdamW. True
+        # - fixed_decay 	bool
+        # - use_gc 	bool bool. use gradient centralization. False
+        # - r 	float float. EMA factor. between 0.9 ~ 0.99 is preferred. 0.95
+        # - adanorm 	bool bool. whether to use the AdaNorm variant. False
+        # - cautious 	bool bool. whether to use the Cautious variant. False
         case Optimizer.LION:
             import lion_pytorch as lp
             optimizer = lp.Lion(
@@ -666,8 +675,10 @@ def create_optimizer(
 
         # LAMB Optimizer
         case Optimizer.LAMB:
-            import bitsandbytes as bnb
-            optimizer = bnb.optim.LAMB(
+            from pytorch_optimizer.optimizer.lamb import Lamb
+            optimizer = Lamb(
+            #import bitsandbytes as bnb
+            #optimizer = bnb.optim.LAMB(
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,

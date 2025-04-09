@@ -1,4 +1,5 @@
 import contextlib
+import math
 import copy
 import json
 import os
@@ -40,6 +41,8 @@ import huggingface_hub
 from requests.exceptions import ConnectionError
 from tqdm import tqdm
 
+from numpy import percentile, set_printoptions, isnan
+set_printoptions(threshold=1) # always summarize big outputs instead of showing huge 10x200 matrices on screen
 
 class GenericTrainer(BaseTrainer):
     model_loader: BaseModelLoader
@@ -72,6 +75,10 @@ class GenericTrainer(BaseTrainer):
         self.one_step_trained = False
 
         self.grad_hook_handles = []
+        self.grad_history = []
+
+        self.loss_history = []
+        self.validation_loss_history = {}
 
     def start(self):
         self.__save_config_to_workspace()
@@ -354,6 +361,7 @@ class GenericTrainer(BaseTrainer):
                 concept_seed = validation_batch["concept_seed"].item()
                 loss = loss_validation.item()
 
+
                 label = concept_name if concept_name else os.path.basename(concept_path)
                 # check and fix collision to display both graphs in tensorboard
                 if label in mapping_label_to_seed and mapping_label_to_seed[label] != concept_seed:
@@ -371,6 +379,15 @@ class GenericTrainer(BaseTrainer):
                 accumulated_loss_per_concept[concept_seed] = accumulated_loss_per_concept.get(concept_seed, 0) + loss
                 concept_counts[concept_seed] = concept_counts.get(concept_seed, 0) + 1
 
+                # keep track of per-image (or at least per-batch) losses as well
+                filenames = validation_batch['image_path']
+                for f in filenames:
+                    assert "/" in f, repr(f)
+                filenames = [f.split("/")[-1][:60] for f in filenames]
+                img_name = "+".join(filenames)
+
+                self.tensorboard.add_scalar(f"validation_loss_singular/{label}/{img_name}", loss, train_progress.global_step)
+
             for concept_seed, total_loss in accumulated_loss_per_concept.items():
                 average_loss = total_loss / concept_counts[concept_seed]
 
@@ -378,10 +395,13 @@ class GenericTrainer(BaseTrainer):
                                             average_loss,
                                             train_progress.global_step)
 
-            if len(concept_counts) > 1:
+            # >=, not >, because hparam logging needs total_average to be defined even if there's only one validation concept.
+            if len(concept_counts) >= 1:
                 total_loss = sum(accumulated_loss_per_concept[key] for key in concept_counts)
                 total_count = sum(concept_counts[key] for key in concept_counts)
                 total_average_loss = total_loss / total_count
+
+                self.validation_loss_history[total_average_loss] = train_progress.global_step
 
                 self.tensorboard.add_scalar("loss/validation_step/total_average",
                                             total_average_loss,
@@ -518,6 +538,8 @@ class GenericTrainer(BaseTrainer):
         return self.repeating_action_needed("gc", 5, TimeUnit.MINUTE, train_progress, start_at_zero=False)
 
     def __needs_validate(self, train_progress: TrainProgress):
+        if train_progress.global_step < int(os.environ.get("OT_VALIDATION_MIN_STEPS", 0)):
+            return False
         return self.repeating_action_needed(
             "validate", self.config.validate_after, self.config.validate_after_unit, train_progress
         )
@@ -564,7 +586,170 @@ class GenericTrainer(BaseTrainer):
             torch.clear_autocast_cache()
             self.model.optimizer.eval()
 
+    def __get_grad_norm(self):
+        total_norm = 0
+        for p in self.parameters:
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** (1. / 2)
+        return total_norm
+
+    def __clip_grad_norm(self):
+        if self.config.clip_grad_norm is None:
+            return
+
+        norm_before = self.__get_grad_norm()
+        self.grad_history.append(norm_before)
+
+        # ... Google ML Engineers say that 10% clipping is a good value, and if you need to clip 
+        # much harder you should likely lower the LR instead. So let's go with that.
+        # This is only meant to help out a tiny bit with stability anyway.
+        clip_value = percentile(self.grad_history, 10)
+
+        new_norm = torch.nn.utils.clip_grad_norm_(self.parameters, clip_value)
+
+        # warn on big clips
+        chg = abs(new_norm - norm_before)
+        if chg > 1e-7:
+            print(f'clipped gradient norm, with threshold {clip_value:.6f}   ')
+            print(f'---> norm clip caused change: {chg:.9f}')
+            print(f'     from {norm_before:.9f} to {new_norm:.9f}   ')
+
+    def warn_high_loss(self, loss, batch):
+        print('-'*32)
+        print(f'High loss of {loss:.5f} detected! Batch info: ')
+        for key in ('image_path', 'crop_resolution', 'prompt'):
+            info = str(batch[key])
+
+            # only truncate if it's a prompt without text embedding tokens
+            if key == "prompt" and len(info) > 70 and "<" not in info: 
+                info = info[:70] + "..."
+
+            print(f' - {key} = {info}')
+
+
+    # warn on big losses above the 95th percentile
+    def check_high_loss(self, loss, batch):
+        self.loss_history.append(loss)
+        if len(self.loss_history) < 20:
+            return False
+
+        high_loss_threshold = percentile(self.loss_history, 99)
+        high_loss_threshold = max(0.01, high_loss_threshold) # never warn if loss <= 0.01
+        high_loss_threshold = min(0.30, high_loss_threshold) # always warn if loss > 0.30
+        if loss > high_loss_threshold:
+            self.warn_high_loss(loss, batch)
+            return True
+
+        return False
+
+    def __param_group_to_strings(self, pg):
+        pg = copy.deepcopy(pg)
+
+        # remove huge useless list of numbers
+        if 'params' in pg:
+            pg['params_count'] = len(pg['params'])
+            del pg['params'] 
+
+        # messy output, not useful
+        if 'buffer' in pg:
+            del pg['buffer']
+
+        # turn tuple into strings as required by tensorboard, e.g.:
+        # {'eps': (1e-30, 1e-16)} becomes {'eps_0': 1e-30, 'eps_1': 1e-16}
+        for k, v in list(pg.items()):
+            if isinstance(v, tuple):
+                for i, tup_val in enumerate(v):
+                    pg[f'{k}_{i}'] = tup_val
+                del pg[k]
+
+        return pg
+
+    def __get_optimizer_params(self):
+        result = {}
+
+        for pg in self.model.optimizer.state_dict()['param_groups']:
+            pg = self.__param_group_to_strings(pg)
+
+            for k in pg.keys():
+                assert k not in result, repr(k)
+
+            result.update(pg)
+
+        return result
+
+    # writes metrics to be grabbed by vizier.
+    def write_metrics(self, metrics):
+        def opener(path, flags):
+            return os.open(path, flags, 0o777) # so other (imm) user can delete it
+        with open("/tmp/metrics.json", "w", opener=opener) as f:
+            f.write(json.dumps(metrics))
+        os.system('chmod 777 /tmp/metrics.json')
+
+    # save hyper-parameters to tensorboard
+    def save_tensorboard_hparams(self):
+        print(f'Saving tensorboard hparams ...')
+
+        try:
+            if self.validation_loss_history:
+                best_val_loss = min(self.validation_loss_history.keys())
+                step = self.validation_loss_history[best_val_loss]
+                metrics = {"hparam/best_validation_loss": best_val_loss}
+
+                self.write_metrics(metrics)
+            else:
+                step = 0
+                metrics = {}
+
+            hparams = {
+                "optimizer": type(self.model.optimizer).__name__,
+                # optimizer parameters are filled in below.
+
+                "learning_rate": self.config.learning_rate,
+                "unet_lr": 1.2345, # TODO
+                "te1_lr": 1.2345, # TODO
+                "te2_lr": 1.2345, # TODO
+                "batch_size": int(self.config.batch_size),
+                "gradient_accumulation_steps": int(self.config.gradient_accumulation_steps),
+
+                # TODO what if we're fine-tuning ?
+                "lora_rank": int(self.model.unet_lora.rank),
+                "lora_alpha": int(self.model.unet_lora.alpha),
+                "layer_preset": "TODO", # TODO
+
+                "warmup_steps": self.config.learning_rate_warmup_steps,
+                "base_model_name": self.config.base_model_name,
+                "dropout_probability": self.config.dropout_probability,
+                "mse_strength": self.config.mse_strength,
+                "mae_strength": self.config.mae_strength,
+                "log_cosh_strength": self.config.log_cosh_strength,
+                "loss_weight_fn": str(self.config.loss_weight_fn),
+                "loss_weight_strength": self.config.loss_weight_strength,
+                "clip_grad_norm": self.config.clip_grad_norm,
+                "weight_dtype": str(self.config.weight_dtype),
+                "output_dtype": str(self.config.output_dtype),
+                "concepts": str(self.config.concepts), # TODO
+            }
+
+            if step:
+                hparams['best_step'] = step
+
+            hparams.update(self.__get_optimizer_params())
+
+            print(f'Final hyper params: {repr(hparams)}')
+
+            self.tensorboard.add_hparams(hparams, metrics, run_name=".")
+
+            print("IPython shell UP"); import IPython; IPython.embed()
+
+        except Exception as e:
+            print("ERROR:")
+            print(e)
+            import IPython; IPython.embed()
+
     def train(self):
+
         train_device = torch.device(self.config.train_device)
 
         train_progress = self.model.train_progress
@@ -574,7 +759,7 @@ class GenericTrainer(BaseTrainer):
             for _epoch in tqdm(range(train_progress.epoch, self.config.epochs, 1), desc="epoch"):
                 self.data_loader.get_data_set().start_next_epoch()
             return
-
+        
         scaler = create_grad_scaler() if enable_grad_scaling(self.config.train_dtype, self.parameters) else None
 
         self.__apply_fused_back_pass(scaler)
@@ -682,19 +867,18 @@ class GenericTrainer(BaseTrainer):
                     has_gradient = True
                     accumulated_loss += loss.item()
 
+
                     if self.__is_update_step(train_progress):
                         if scaler and self.config.optimizer.optimizer.supports_fused_back_pass() and self.config.optimizer.fused_back_pass:
                             scaler.step_after_unscale_parameter_(self.model.optimizer)
                             scaler.update()
                         elif scaler:
                             scaler.unscale_(self.model.optimizer)
-                            if self.config.clip_grad_norm is not None:
-                                nn.utils.clip_grad_norm_(self.parameters, self.config.clip_grad_norm)
+                            self.__clip_grad_norm()
                             scaler.step(self.model.optimizer)
                             scaler.update()
                         else:
-                            if self.config.clip_grad_norm is not None:
-                                nn.utils.clip_grad_norm_(self.parameters, self.config.clip_grad_norm)
+                            self.__clip_grad_norm()
                             self.model.optimizer.step()
 
                         lr_scheduler.step()  # done before zero_grad, because some lr schedulers need gradients
@@ -706,6 +890,18 @@ class GenericTrainer(BaseTrainer):
                         )
 
                         self.tensorboard.add_scalar("loss/train_step", accumulated_loss, train_progress.global_step)
+
+                        if isnan(accumulated_loss):
+                            raise ValueError("Got a NaN loss, training went off the rails...")
+
+                        if self.check_high_loss(accumulated_loss, batch):
+                            
+                            img_paths = "; ".join(batch['image_path'])
+                            prompts = "; ".join(batch['prompt'])
+                            concepts = "; ".join(batch['concept_name'])
+                            text = f'High loss detected: {accumulated_loss:.5f}\nConcept name: {repr(concepts)}\nImages: {repr(img_paths)}\nPrompt: {repr(prompts)}'
+                            self.tensorboard.add_text("loss/high_loss", text, train_progress.global_step)
+
                         ema_loss = ema_loss or accumulated_loss
                         ema_loss_steps += 1
                         ema_loss_decay = min(0.99, 1 - (1 / ema_loss_steps))
@@ -778,6 +974,9 @@ class GenericTrainer(BaseTrainer):
                 output_model_destination=save_path,
                 dtype=self.config.output_dtype.torch_dtype()
             )
+
+            self.save_tensorboard_hparams()
+
         elif self.model is not None:
             self.model.to(self.temp_device)
 
